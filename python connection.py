@@ -6,10 +6,10 @@ from dotenv import load_dotenv
 # Load database credentials from .env
 load_dotenv()
 
-password = os.getenv("reallyStrongPwd123")
+password = os.getenv("SQLSERVER_PASSWORD")
 
 if not password:
-    raise RuntimeError("reallyStrongPwd123 is missing from .env")
+    raise RuntimeError("SQLSERVER_PASSWORD is missing from .env")
 
 # Escape special characters in the password
 escaped_password = "{" + password.replace("}", "}}") + "}"
