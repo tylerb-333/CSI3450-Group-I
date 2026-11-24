@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CharterOps Bookings</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 30px; }
+        label { display: block; margin-top: 10px; }
+        input, select { padding: 5px; width: 260px; }
+        button { margin-top: 10px; padding: 6px 16px; }
+        .option { border: 1px solid #ccc; padding: 10px; margin-top: 8px; max-width: 760px; }
+        .option.selected { border-color: #2a6; background: #f3fbf5; }
+        .meta { font-size: 0.9em; color: #555; margin-top: 3px; }
+        #result { margin-top: 15px; font-weight: bold; }
+        .ok { color: green; }
+        .bad { color: red; }
+    </style>
+</head>
+<body>
+    <h1>CharterOps</h1>
+
+    <h2>Find a Flight</h2>
+    <label>From
+        <select id="origin"></select>
+    </label>
+    <label>To
+        <select id="destination"></select>
+    </label>
+    <button id="searchBtn" type="button">Search</button>
+    <div id="searchResults"></div>
+
+    <h2>Book</h2>
+    <form id="bookingForm">
+        <label>First Name
+            <input type="text" id="first_name" required>
+        </label>
+        <label>Last Name
+            <input type="text" id="last_name" required>
+        </label>
+        <label>Email
+            <input type="email" id="email" required>
+        </label>
+        <label>Phone (optional)
+            <input type="text" id="phone">
+        </label>
+        <div id="seatArea"></div>
+        <button type="submit">Book</button>
+    </form>
+    <div id="result"></div>
+
+    <script>
+        const originSelect = document.getElementById("origin");
+        const destinationSelect = document.getElementById("destination");
+        const searchResults = document.getElementById("searchResults");
+        const seatArea = document.getElementById("seatArea");
+        const result = document.getElementById("result");
+
+        let selectedLegs = null;
+        let seatSelects = [];
+
+        function formatTime(value) {
+            return new Date(value).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+        }
+
+        function describeLeg(leg) {
+            return `${leg.FLIGHT_NUMBER}: ${leg.ORIGIN} to ${leg.DESTINATION}, ` +
+                   `departs ${formatTime(leg.DEPARTURE_DATETIME)}, ` +
+                   `arrives ${formatTime(leg.ARRIVAL_DATETIME)} ` +
+                   `(${leg.SEATS_LEFT} seats left)`;
+        }
+
+        async function loadAirports() {
+            const response = await fetch("/api/airports");
+            const airports = await response.json();
+
+            if (!Array.isArray(airports)) {
+                result.textContent = airports.error || "Could not load airports.";
+                result.className = "bad";
+                return;
+            }
+
+            for (const select of [originSelect, destinationSelect]) {
+                select.innerHTML = "";
+                for (const airport of airports) {
+                    const option = document.createElement("option");
+                    option.value = airport.ICAO_CODE;
+                    option.textContent = `${airport.CITY} (${airport.ICAO_CODE})`;
+                    select.appendChild(option);
+                }
+            }
+            if (airports.length > 1) {
+                destinationSelect.selectedIndex = 1;
+            }
+        }
+
+        function clearSelection() {
+            selectedLegs = null;
+            seatSelects = [];
+            seatArea.innerHTML = "";
+        }
+
+        async function searchFlights() {
+            searchResults.innerHTML = "";
+            clearSelection();
+
+            const origin = originSelect.value;
+            const destination = destinationSelect.value;
+            const response = await fetch(`/api/search?origin=${origin}&destination=${destination}`);
+            const data = await response.json();
+
+            if (!response.ok) {
+                searchResults.textContent = data.error || "Search failed.";
+                searchResults.className = "bad";
+                return;
+            }
+
+            if (data.direct.length === 0 && data.connections.length === 0) {
+                searchResults.textContent = "No flights with open seats for that route.";
+                searchResults.className = "";
+                return;
+            }
+
+            searchResults.className = "";
+            for (const leg of data.direct) {
+                addOption([leg], "Direct flight");
+            }
+            for (const connection of data.connections) {
+                addOption(connection.legs, `Connection, ${connection.layover_minutes} minute layover`);
+            }
+        }
+
+        function addOption(legs, label) {
+            const box = document.createElement("div");
+            box.className = "option";
+
+            const title = document.createElement("div");
+            title.textContent = label;
+            box.appendChild(title);
+
+            for (const leg of legs) {
+                const line = document.createElement("div");
+                line.className = "meta";
+                line.textContent = describeLeg(leg);
+                box.appendChild(line);
+            }
+
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = "Select";
+            button.addEventListener("click", () => selectItinerary(legs, box));
+            box.appendChild(button);
+
+            searchResults.appendChild(box);
+        }
+
+        async function selectItinerary(legs, box) {
+            document.querySelectorAll(".option").forEach((el) => el.classList.remove("selected"));
+            box.classList.add("selected");
+
+            selectedLegs = legs;
+            seatSelects = [];
+            seatArea.innerHTML = "";
+
+            for (const leg of legs) {
+                const label = document.createElement("label");
+                label.textContent = `Seat on ${leg.FLIGHT_NUMBER} `;
+
+                const select = document.createElement("select");
+                const response = await fetch(`/api/flights/${leg.FLIGHT_ID}/seats`);
+                const data = await response.json();
+
+                for (const seat of data.available || []) {
+                    const option = document.createElement("option");
+                    option.value = seat;
+                    option.textContent = seat;
+                    select.appendChild(option);
+                }
+
+                label.appendChild(select);
+                seatArea.appendChild(label);
+                seatSelects.push(select);
+            }
+        }
+
+        document.getElementById("searchBtn").addEventListener("click", searchFlights);
+
+        document.getElementById("bookingForm").addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            if (!selectedLegs) {
+                result.textContent = "Search and select a flight first.";
+                result.className = "bad";
+                return;
+            }
+
+            const payload = {
+                first_name: document.getElementById("first_name").value.trim(),
+                last_name: document.getElementById("last_name").value.trim(),
+                email: document.getElementById("email").value.trim(),
+                phone: document.getElementById("phone").value.trim(),
+                legs: selectedLegs.map((leg, i) => ({
+                    flight_id: leg.FLIGHT_ID,
+                    seat_number: seatSelects[i].value
+                }))
+            };
+
+            const response = await fetch("/api/itineraries", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            const data = await response.json();
+
+            if (response.ok) {
+                result.textContent = `${data.message} (passenger ID ${data.passenger_id}, ${data.legs_booked} flight(s))`;
+                result.className = "ok";
+                searchFlights();
+            } else {
+                result.textContent = data.error;
+                result.className = "bad";
+            }
+        });
+
+        loadAirports();
+    </script>
+</body>
+</html>
